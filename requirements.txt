@@ -1,0 +1,8 @@
+gym~=0.26.2
+PyAutoGUI~=0.9.54
+opencv-python~=4.9.0.80
+numpy~=1.26.4
+PyGetWindow~=0.0.9
+Pymem~=1.13.1
+pytesseract~=0.3.10
+pillow~=10.2.0
