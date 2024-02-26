@@ -2,34 +2,33 @@ import gym
 from gym import spaces
 
 import pyautogui
+import json
 import cv2
 
 import numpy as np
 import pygetwindow as gw
 import time
 
-from pymem import Pymem
-from pymem.process import module_from_name
+from Utils.mem_extract import MemExtract
 
 from threading import Thread
-
-from Utils.game_attrs import PTR_DICT
 
 ### Imports ###
 
 class GameEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
-    def __init__(self):
+    def __init__(self, record_data=False):
         super(GameEnv, self).__init__()
 
-        # Memory stuff
-        self.pm = Pymem("FSD-Win64-Shipping.exe")
-        self.game_module = module_from_name(self.pm.process_handle, "FSD-Win64-Shipping.exe").lpBaseOfDll
+        self.record_data = record_data
+        if self.record_data:
+            self.gameplay_data = []
 
         self.action_space = spaces.Discrete(2)  # 0 = do nothing, 1 = kick
 
         self.game_window = self.find_game_window("Deep Rock Galactic")
+        self.mem = MemExtract("FSD-Win64-Shipping.exe")
 
         if self.game_window is None:
             raise Exception("Game window not found. Is the game running?")
@@ -39,52 +38,32 @@ class GameEnv(gym.Env):
 
         CHANNELS = 3
         self.observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, CHANNELS), dtype=np.uint8)
-        self.initialize_game_state()
 
-    def initialize_game_state(self):
         self.score = 0
         self.previous_score = 0
         self.kicks = 0
+        self.combo_multiplier = 1
 
+        self.last_action = None
         self.done = False
 
         self.deduct_thread = Thread(target=self.deduct_score)
         self.deduct_thread.start()
 
-    def get_pointer_address(self, base, offsets):
-        addr = self.pm.read_longlong(base)
+    def get_score(self) -> int:
+        return self.score
 
-        for i in offsets:
-            if i is not offsets[-1]:
-                addr = self.pm.read_longlong(addr + i)
-            else:
-                return addr + offsets[-1]
+    def get_kicks(self) -> int:
+        return self.kicks
 
-    def memory_tracking(self):
-        # Track score
-        score_address = self.get_pointer_address(self.game_module + PTR_DICT['score']['base'], PTR_DICT['score']['offsets'])
-        self.score = self.pm.read_longlong(score_address)
+    def get_last_action(self):
+        return self.last_action
 
-        # Track kicks
-        kicks_address = self.get_pointer_address(self.game_module + PTR_DICT['kicks']['base'], PTR_DICT['kicks']['offsets'])
-        memory_kicks = self.pm.read_longlong(kicks_address)
+    def save_gameplay_data(self, filepath):
+        with open(filepath, 'w') as f:
+            json.dump(self.gameplay_data, f, ensure_ascii=False, indent=4)
 
-        if self.score is None or memory_kicks is None:
-            # TODO: Fallback addresses (PTR_DICT['title']['fallback'] -> list of bases)
-            print("Fallback: Score or kicks not detected using main pointer.")
-
-        if memory_kicks is not None:
-            if memory_kicks != self.kicks:
-                print(f"Discrepancy detected: internal kicks ({self.kicks}) vs memory kicks ({memory_kicks}), setting kicks to {memory_kicks}")
-                self.kicks = memory_kicks
-
-        # Update self.score and self.kicks if no discrepancy or after adjustment
-        if self.score is not None:
-            print("Score detected:", int(self.score))
-        if self.kicks is not None:
-            print("Kicks detected:", int(self.kicks), "mem:", int(memory_kicks))
-
-    def find_game_window(self, title):
+    def find_game_window(self, title: str):
         windows = gw.getWindowsWithTitle(title)
 
         for window in windows:
@@ -114,10 +93,9 @@ class GameEnv(gym.Env):
         if action == 1:
             pyautogui.press('e')
             self.kicks += 1
+        self.last_action = action
 
-    def update_reward_and_state(self):
-        self.memory_tracking()
-
+    def update_reward_and_state(self) -> int:
         if self.score > self.previous_score:
             reward = 10 * self.combo_multiplier
             self.combo_multiplier *= 2
@@ -132,11 +110,26 @@ class GameEnv(gym.Env):
         self.execute_action(action)
         time.sleep(0.5)
 
+        # Memory stuff :nerd:
+        memory_data = self.mem.extract_memory()
+
+        if memory_data['score'] is not None and self.score != memory_data['score']:
+            print(f"Discrepancy in score corrected: Env({self.score}) vs Memory({memory_data['score']})")
+            self.score = memory_data['score']
+
+        if memory_data['kicks'] is not None and self.kicks != memory_data['kicks']:
+            print(f"Discrepancy in kicks corrected: Env({self.kicks}) vs Memory({memory_data['kicks']})")
+            self.kicks = memory_data['kicks']
+
         reward = self.update_reward_and_state()
+
         observation = self.capture_screen()
 
-        done = self.kicks >= 100  # Terminate when kicks reach 100
+        done = self.kicks >= 100
         info = {'score': self.score, 'kicks': self.kicks, 'combo': self.combo_multiplier}
+
+        if self.record_data:
+            self.gameplay_data.append((observation, action, reward))
 
         return observation, reward, done, info
 
@@ -146,9 +139,8 @@ class GameEnv(gym.Env):
 
         return observation
 
-if __name__ == "__main__":
-    # Testing if detection works
-    env = GameEnv()
-    while True:
-        env.memory_tracking()
-        time.sleep(1)
+    def close(self):
+        self.done = True
+        self.deduct_thread.join()
+
+        cv2.destroyAllWindows()

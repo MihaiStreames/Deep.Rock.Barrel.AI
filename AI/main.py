@@ -1,21 +1,20 @@
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 
-from Env.main import GameEnv
+from Env.game_env import GameEnv
 
-# Process the footage and create a dataset for pre-training (not shown here)
+### Imports ###
 
 env = make_vec_env(lambda: GameEnv(), n_envs=1)
 model = PPO("CnnPolicy", env, verbose=1)
 
-# Pre-train the model using your dataset (not shown here)
+model.learn(total_timesteps=10000)
+model.save("ppo_drgbarrels_v1")
 
-# Train the model
-model.learn(total_timesteps=100000)
-model.save("ppo_deep_rock_galactic")
-
-# To test the model
 obs = env.reset()
-for _ in range(1000):
+for i in range(1000):
     action, _states = model.predict(obs, deterministic=True)
     obs, rewards, dones, info = env.step(action)
+    # env.render() - not yet, will use the GameVisualizer class
+
+env.close()

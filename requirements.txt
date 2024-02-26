@@ -6,3 +6,4 @@ PyGetWindow~=0.0.9
 Pymem~=1.13.1
 pytesseract~=0.3.10
 pillow~=10.2.0
+stable-baselines3~=2.3.0a2
