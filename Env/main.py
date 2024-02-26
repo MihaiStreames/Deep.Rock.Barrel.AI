@@ -10,7 +10,10 @@ import time
 
 from pymem import Pymem
 from pymem.process import module_from_name
-from Utils.game_attrs import PLAYER_PTR_WIN
+
+from threading import Thread
+
+from Utils.game_attrs import PTR_DICT
 
 ### Imports ###
 
@@ -19,6 +22,8 @@ class GameEnv(gym.Env):
 
     def __init__(self):
         super(GameEnv, self).__init__()
+
+        # Memory stuff
         self.pm = Pymem("FSD-Win64-Shipping.exe")
         self.game_module = module_from_name(self.pm.process_handle, "FSD-Win64-Shipping.exe").lpBaseOfDll
 
@@ -32,9 +37,19 @@ class GameEnv(gym.Env):
             print("Game window found:", self.game_window.title)
         self.width, self.height = self.game_window.width, self.game_window.height
 
-        # Dynamically set observation space based on the game window size
-        CHANNELS = 3  # Assuming RGB screenshots
+        CHANNELS = 3
         self.observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, CHANNELS), dtype=np.uint8)
+        self.initialize_game_state()
+
+    def initialize_game_state(self):
+        self.score = 0
+        self.previous_score = 0
+        self.kicks = 0
+
+        self.done = False
+
+        self.deduct_thread = Thread(target=self.deduct_score)
+        self.deduct_thread.start()
 
     def get_pointer_address(self, base, offsets):
         addr = self.pm.read_longlong(base)
@@ -45,17 +60,41 @@ class GameEnv(gym.Env):
             else:
                 return addr + offsets[-1]
 
-    def find_game_window(self, title_substring):
-        windows = gw.getWindowsWithTitle(title_substring)
+    def memory_tracking(self):
+        # Track score
+        score_address = self.get_pointer_address(self.game_module + PTR_DICT['score']['base'], PTR_DICT['score']['offsets'])
+        self.score = self.pm.read_longlong(score_address)
+
+        # Track kicks
+        kicks_address = self.get_pointer_address(self.game_module + PTR_DICT['kicks']['base'], PTR_DICT['kicks']['offsets'])
+        memory_kicks = self.pm.read_longlong(kicks_address)
+
+        if self.score is None or memory_kicks is None:
+            # TODO: Fallback addresses (PTR_DICT['title']['fallback'] -> list of bases)
+            print("Fallback: Score or kicks not detected using main pointer.")
+
+        if memory_kicks is not None:
+            if memory_kicks != self.kicks:
+                print(f"Discrepancy detected: internal kicks ({self.kicks}) vs memory kicks ({memory_kicks}), setting kicks to {memory_kicks}")
+                self.kicks = memory_kicks
+
+        # Update self.score and self.kicks if no discrepancy or after adjustment
+        if self.score is not None:
+            print("Score detected:", int(self.score))
+        if self.kicks is not None:
+            print("Kicks detected:", int(self.kicks), "mem:", int(memory_kicks))
+
+    def find_game_window(self, title):
+        windows = gw.getWindowsWithTitle(title)
+
         for window in windows:
-            if title_substring in window.title:
+            if title in window.title:
                 return window
         return None
 
     def capture_screen(self):
-        # Make sure the game window is focused and in the foreground
         self.game_window.activate()
-        # Use the game window's position and size to capture just its content
+
         x, y = self.game_window.topleft
 
         screenshot = pyautogui.screenshot(region=(x, y, self.width, self.height))
@@ -64,47 +103,40 @@ class GameEnv(gym.Env):
 
         return screenshot
 
-    def initialize_game_state(self):
-        self.score = 0
-        self.previous_score = 0
-        self.combo_multiplier = 1
+    def deduct_score(self):
+        while not self.done:
+            time.sleep(1)
+            self.score -= 1
+            if self.score < 0:
+                self.score = 0
 
     def execute_action(self, action):
-        if action == 1:  # Kick action
-            pyautogui.press('e')  # Simulate the E key press to kick
-
-    def detect_score_change(self):
-        address = self.get_pointer_address(self.game_module + PLAYER_PTR_WIN['score']['base'], PLAYER_PTR_WIN['score']['offsets'])
-        self.score = self.pm.read_longlong(address)
-
-        if self.score is None:
-            print("Score not detected")
-        else:
-            print("Score detected:", int(self.score))
+        if action == 1:
+            pyautogui.press('e')
+            self.kicks += 1
 
     def update_reward_and_state(self):
-        self.detect_score_change()
+        self.memory_tracking()
 
         if self.score > self.previous_score:
-            # Score increased, successful kick
             reward = 10 * self.combo_multiplier
-            self.combo_multiplier *= 2  # Increase combo multiplier
+            self.combo_multiplier *= 2
         else:
-            # Score did not increase, missed kick
-            reward = -5  # Penalty for missing
-            self.combo_multiplier = 1  # Reset combo multiplier
+            reward = -5
+            self.combo_multiplier = 1
         self.previous_score = self.score
 
         return reward
 
     def step(self, action):
         self.execute_action(action)
-        time.sleep(0.5)  # Wait for action to take effect and score to update
-        reward = self.update_reward_and_state()
+        time.sleep(0.5)
 
+        reward = self.update_reward_and_state()
         observation = self.capture_screen()
-        done = False  # Define your termination condition
-        info = {'score': self.score, 'combo': self.combo_multiplier}
+
+        done = self.kicks >= 100  # Terminate when kicks reach 100
+        info = {'score': self.score, 'kicks': self.kicks, 'combo': self.combo_multiplier}
 
         return observation, reward, done, info
 
@@ -115,8 +147,8 @@ class GameEnv(gym.Env):
         return observation
 
 if __name__ == "__main__":
-    # Testing if score detection works
+    # Testing if detection works
     env = GameEnv()
     while True:
-        env.detect_score_change()
+        env.memory_tracking()
         time.sleep(1)
