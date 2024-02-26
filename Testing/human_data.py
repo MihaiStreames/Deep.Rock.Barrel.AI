@@ -5,12 +5,12 @@ import keyboard
 
 import time
 
-from Env.game_env import GameEnv
+from Env.game_env import DRGBarrelEnv
 from Visualizer.game_visualizer import GameVisualizer
 
 ### Imports ###
 
-def update_visualizer(visualizer: 'GameVisualizer', env: 'GameEnv'):
+def update_visualizer(visualizer: 'GameVisualizer', env: 'DRGBarrelEnv'):
     while True:
         score = env.get_score()
         kicks = env.get_kicks()
@@ -25,9 +25,10 @@ def record_human_play():
     data_dir = os.path.join(main_dir, os.pardir, 'Data')
     # EXTRA SAFETY
     os.makedirs(data_dir, exist_ok=True)
-    file_path = os.path.join(data_dir, 'gameplay_data.json')
 
-    env = GameEnv(record_data=True)
+    file_path = os.path.join(data_dir, 'gameplay_data.pkl')
+
+    env = DRGBarrelEnv(record_data=True)
     visualizer = GameVisualizer()
 
     # Start the visualizer update loop in a separate thread

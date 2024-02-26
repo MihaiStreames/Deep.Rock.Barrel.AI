@@ -1,20 +1,30 @@
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
+import os
+import time
 
-from Env.game_env import GameEnv
+from stable_baselines3 import PPO
+
+from Env.game_env import DRGBarrelEnv
 
 ### Imports ###
 
-env = make_vec_env(lambda: GameEnv(), n_envs=1)
-model = PPO("CnnPolicy", env, verbose=1)
+model_name = f"drgbarrels_v1_{int(time.time())}"
+models_dir = f"Models/{model_name}"
+log_dir = f"Logs/{model_name}"
 
-model.learn(total_timesteps=10000)
-model.save("ppo_drgbarrels_v1")
+# Create directories if they don't exist
+os.makedirs(models_dir, exist_ok=True)
+os.makedirs(log_dir, exist_ok=True)
 
-obs = env.reset()
-for i in range(1000):
-    action, _states = model.predict(obs, deterministic=True)
-    obs, rewards, dones, info = env.step(action)
-    # env.render() - not yet, will use the GameVisualizer class
+env = DRGBarrelEnv(record_data=False)
 
-env.close()
+model = PPO("CnnPolicy", env, verbose=1, tensorboard_log=log_dir)
+
+TIMESTEPS = 10000
+iteration = 0
+
+# Training loop
+while True:
+    print(f"Training iteration {iteration}")
+    model.learn(total_timesteps=TIMESTEPS, reset_num_timesteps=False, tb_log_name="PPO")
+    model.save(f"{models_dir}/model_{iteration}")
+    iteration += 1

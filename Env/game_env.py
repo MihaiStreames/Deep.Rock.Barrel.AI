@@ -2,7 +2,7 @@ import gym
 from gym import spaces
 
 import pyautogui
-import json
+import pickle
 import cv2
 
 import numpy as np
@@ -15,11 +15,11 @@ from threading import Thread
 
 ### Imports ###
 
-class GameEnv(gym.Env):
+class DRGBarrelEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, record_data=False):
-        super(GameEnv, self).__init__()
+        super(DRGBarrelEnv, self).__init__()
 
         self.record_data = record_data
         if self.record_data:
@@ -47,7 +47,13 @@ class GameEnv(gym.Env):
         self.last_action = None
         self.done = False
 
+        self.observation_buffer = None
+        self.capture_thread = Thread(target=self.continuous_capture)
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
+
         self.deduct_thread = Thread(target=self.deduct_score)
+        self.deduct_thread.daemon = True
         self.deduct_thread.start()
 
     def get_score(self) -> int:
@@ -60,8 +66,12 @@ class GameEnv(gym.Env):
         return self.last_action
 
     def save_gameplay_data(self, filepath):
-        with open(filepath, 'w') as f:
-            json.dump(self.gameplay_data, f, ensure_ascii=False, indent=4)
+        with open(filepath, 'wb') as f:
+            pickle.dump(self.gameplay_data, f)
+
+    def load_gameplay_data(self, filepath):
+        with open(filepath, 'rb') as f:
+            self.gameplay_data = pickle.load(f)
 
     def find_game_window(self, title: str):
         windows = gw.getWindowsWithTitle(title)
@@ -82,6 +92,11 @@ class GameEnv(gym.Env):
 
         return screenshot
 
+    def continuous_capture(self):
+        while not self.done:
+            self.observation_buffer = self.capture_screen()
+            time.sleep(1.0 / 60)
+
     def deduct_score(self):
         while not self.done:
             time.sleep(1)
@@ -91,7 +106,7 @@ class GameEnv(gym.Env):
 
     def execute_action(self, action):
         if action == 1:
-            pyautogui.press('e')
+            # pyautogui.press('e') only for AI
             self.kicks += 1
         self.last_action = action
 
@@ -113,9 +128,7 @@ class GameEnv(gym.Env):
         # Memory stuff :nerd:
         memory_data = self.mem.extract_memory()
 
-        if memory_data['score'] is not None and self.score != memory_data['score']:
-            print(f"Discrepancy in score corrected: Env({self.score}) vs Memory({memory_data['score']})")
-            self.score = memory_data['score']
+        self.score = memory_data['score']
 
         if memory_data['kicks'] is not None and self.kicks != memory_data['kicks']:
             print(f"Discrepancy in kicks corrected: Env({self.kicks}) vs Memory({memory_data['kicks']})")
@@ -123,7 +136,7 @@ class GameEnv(gym.Env):
 
         reward = self.update_reward_and_state()
 
-        observation = self.capture_screen()
+        observation = self.observation_buffer
 
         done = self.kicks >= 100
         info = {'score': self.score, 'kicks': self.kicks, 'combo': self.combo_multiplier}
@@ -134,13 +147,19 @@ class GameEnv(gym.Env):
         return observation, reward, done, info
 
     def reset(self):
-        self.initialize_game_state()
-        observation = self.capture_screen()
+        self.score = 0
+        self.previous_score = 0
+        self.kicks = 0
+        self.combo_multiplier = 1
+        self.last_action = None
+        self.done = False
 
+        observation = self.capture_screen()
         return observation
 
     def close(self):
         self.done = True
+        self.capture_thread.join()
         self.deduct_thread.join()
 
         cv2.destroyAllWindows()
