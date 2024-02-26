@@ -30,6 +30,6 @@ class MemExtract:
 
         # Extract kicks
         kicks_address = self.get_pointer_address(self.game_module + PTR_DICT['kicks']['base'], PTR_DICT['kicks']['offsets'])
-        memory_data['kicks'] = self.pm.read_longlong(kicks_address)
+        memory_data['kicks'] = self.pm.read_int(kicks_address)
 
         return memory_data

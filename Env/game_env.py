@@ -18,12 +18,8 @@ from threading import Thread
 class DRGBarrelEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, record_data=False):
+    def __init__(self):
         super(DRGBarrelEnv, self).__init__()
-
-        self.record_data = record_data
-        if self.record_data:
-            self.gameplay_data = []
 
         self.action_space = spaces.Discrete(2)  # 0 = do nothing, 1 = kick
 
@@ -39,15 +35,19 @@ class DRGBarrelEnv(gym.Env):
         CHANNELS = 3
         self.observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, CHANNELS), dtype=np.uint8)
 
+        self.is_first_reset = True
+
         self.score = 0
         self.previous_score = 0
         self.kicks = 0
+        self.last_kick_time = 0
         self.combo_multiplier = 1
 
         self.last_action = None
         self.done = False
 
         self.observation_buffer = None
+
         self.capture_thread = Thread(target=self.continuous_capture)
         self.capture_thread.daemon = True
         self.capture_thread.start()
@@ -64,14 +64,6 @@ class DRGBarrelEnv(gym.Env):
 
     def get_last_action(self):
         return self.last_action
-
-    def save_gameplay_data(self, filepath):
-        with open(filepath, 'wb') as f:
-            pickle.dump(self.gameplay_data, f)
-
-    def load_gameplay_data(self, filepath):
-        with open(filepath, 'rb') as f:
-            self.gameplay_data = pickle.load(f)
 
     def find_game_window(self, title: str):
         windows = gw.getWindowsWithTitle(title)
@@ -95,30 +87,32 @@ class DRGBarrelEnv(gym.Env):
     def continuous_capture(self):
         while not self.done:
             self.observation_buffer = self.capture_screen()
-            time.sleep(1.0 / 60)
+            time.sleep(1 / 60)
 
     def deduct_score(self):
         while not self.done:
-            time.sleep(1)
+            time.sleep(5)
             self.score -= 1
             if self.score < 0:
                 self.score = 0
 
     def execute_action(self, action):
         if action == 1:
-            # pyautogui.press('e') only for AI
+            pyautogui.press('e')
             self.kicks += 1
         self.last_action = action
 
     def update_reward_and_state(self) -> int:
-        if self.score > self.previous_score:
-            reward = 10 * self.combo_multiplier
-            self.combo_multiplier *= 2
-        else:
-            reward = -5
-            self.combo_multiplier = 1
-        self.previous_score = self.score
+        score_change = self.score - self.previous_score
 
+        if score_change > 0:
+            reward = 10 * score_change * self.combo_multiplier
+            self.combo_multiplier = min(self.combo_multiplier * 2, 10)
+        else:
+            reward = 1
+            self.combo_multiplier = 1
+
+        self.previous_score = self.score
         return reward
 
     def step(self, action):
@@ -135,27 +129,51 @@ class DRGBarrelEnv(gym.Env):
             self.kicks = memory_data['kicks']
 
         reward = self.update_reward_and_state()
+        print(f"Reward: {reward}")
 
         observation = self.observation_buffer
 
         done = self.kicks >= 100
         info = {'score': self.score, 'kicks': self.kicks, 'combo': self.combo_multiplier}
-
-        if self.record_data:
-            self.gameplay_data.append((observation, action, reward))
+        print(f"Info: {info}")
 
         return observation, reward, done, info
 
     def reset(self):
+        self.done = True
+
+        if self.capture_thread.is_alive():
+            self.capture_thread.join()
+        if self.deduct_thread.is_alive():
+            self.deduct_thread.join()
+
         self.score = 0
         self.previous_score = 0
         self.kicks = 0
         self.combo_multiplier = 1
         self.last_action = None
         self.done = False
+        self.observation_buffer = None
+
+        if not self.is_first_reset:
+            input("Press Enter in the terminal to continue with the next episode...")
+        else:
+            print("First reset, continuing without waiting for input...")
+            self.is_first_reset = False
+
+        self.start_threads()
 
         observation = self.capture_screen()
         return observation
+
+    def start_threads(self):
+        self.capture_thread = Thread(target=self.continuous_capture)
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
+
+        self.deduct_thread = Thread(target=self.deduct_score)
+        self.deduct_thread.daemon = True
+        self.deduct_thread.start()
 
     def close(self):
         self.done = True
